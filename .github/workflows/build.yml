@@ -26,37 +26,41 @@ jobs:
     - name: Poppler をダウンロードして配置
       run: |
         $url = "https://github.com/oschwartz10612/poppler-windows/releases/download/v24.02.0-0/Release-24.02.0-0.zip"
-        $zip = "poppler.zip"
-        $dest = "C:\poppler"
-        Invoke-WebRequest -Uri $url -OutFile $zip
-        Expand-Archive -Path $zip -DestinationPath $dest -Force
-        $bin = Get-ChildItem $dest -Recurse -Filter "pdftoppm.exe" | Select-Object -First 1 -ExpandProperty DirectoryName
+        Invoke-WebRequest -Uri $url -OutFile poppler.zip
+        Expand-Archive -Path poppler.zip -DestinationPath C:\poppler -Force
+        $bin = Get-ChildItem C:\poppler -Recurse -Filter "pdftoppm.exe" | Select-Object -First 1 -ExpandProperty DirectoryName
         echo $bin | Out-File -Append -FilePath $env:GITHUB_PATH
-        echo "Poppler bin: $bin"
+        echo "POPPLER_BIN=$bin" | Out-File -Append -FilePath $env:GITHUB_ENV
 
-    - name: Poppler と Tesseract の動作確認
+    - name: 動作確認
       run: |
         pdftoppm -v
         tesseract --list-langs
+        Write-Host "Poppler bin: $env:POPPLER_BIN"
+        Get-ChildItem $env:POPPLER_BIN | Select-Object Name
 
     - name: Pythonライブラリをインストール
       run: |
         pip install --upgrade pip
         pip install pikepdf pypdf pdf2image pillow pytesseract pyinstaller tkinterdnd2
 
-    - name: Poppler バイナリを同梱してEXEをビルド
+    - name: EXEをビルド（Popplerの存在するexeのみ同梱）
       run: |
-        $bin = Get-ChildItem C:\poppler -Recurse -Filter "pdftoppm.exe" | Select-Object -First 1 -ExpandProperty DirectoryName
-        pyinstaller `
-          --onefile `
-          --windowed `
-          --name "橋梁点検PDFリンク追加ツール" `
-          --hidden-import "PIL._tkinter_finder" `
-          --collect-all "tkinterdnd2" `
-          --add-binary "${bin}\pdftoppm.exe;poppler" `
-          --add-binary "${bin}\pdftinfo.exe;poppler" `
-          --add-binary "${bin}\pdfinfo.exe;poppler" `
-          bridge_pdf_link_app.py
+        # 実際に存在するexeだけを収集
+        $binaries = @("pdftoppm.exe","pdftoppm.exe","pdfinfo.exe","pdftopdf.exe") | ForEach-Object {
+          $p = Join-Path $env:POPPLER_BIN $_
+          if (Test-Path $p) { "--add-binary `"${p};poppler`"" }
+        }
+        $args = @(
+          "--onefile",
+          "--windowed",
+          "--name", "橋梁点検PDFリンク追加ツール",
+          "--hidden-import", "PIL._tkinter_finder",
+          "--collect-all", "tkinterdnd2"
+        ) + $binaries + @("bridge_pdf_link_app.py")
+
+        Write-Host "pyinstaller args: $args"
+        & pyinstaller @args
 
     - name: ビルド成果物をアップロード
       uses: actions/upload-artifact@v4
@@ -91,18 +95,22 @@ jobs:
         pip install --upgrade pip
         pip install pikepdf pypdf pdf2image pillow pytesseract pyinstaller tkinterdnd2
 
-    - name: Poppler バイナリを同梱してアプリをビルド
+    - name: アプリをビルド（Popplerの存在するバイナリのみ同梱）
       run: |
         POPPLER_BIN=$(dirname $(which pdftoppm))
+        BINARIES=""
+        for exe in pdftoppm pdfinfo pdftopdf; do
+          if [ -f "${POPPLER_BIN}/${exe}" ]; then
+            BINARIES="$BINARIES --add-binary ${POPPLER_BIN}/${exe}:poppler"
+          fi
+        done
         pyinstaller \
           --onefile \
           --windowed \
           --name "橋梁点検PDFリンク追加ツール" \
           --hidden-import "PIL._tkinter_finder" \
           --collect-all "tkinterdnd2" \
-          --add-binary "${POPPLER_BIN}/pdftoppm:poppler" \
-          --add-binary "${POPPLER_BIN}/pdftinfo:poppler" \
-          --add-binary "${POPPLER_BIN}/pdfinfo:poppler" \
+          $BINARIES \
           bridge_pdf_link_app.py
 
     - name: ビルド成果物をアップロード
